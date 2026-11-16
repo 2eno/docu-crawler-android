@@ -135,7 +135,11 @@ fun SetupScreen(vm: MainViewModel, onOpenLogin: () -> Unit, onCrawlStarted: () -
                         Icon(Icons.Filled.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("Session aktiv · ${s.cookieNames.size} Cookies", style = MaterialTheme.typography.titleSmall)
+                            val parts = buildList {
+                                if (s.cookieNames.isNotEmpty()) add("${s.cookieNames.size} Cookies")
+                                s.httpAuth?.let { add("HTTP-Login '${it.username}'") }
+                            }
+                            Text("Session aktiv · ${parts.joinToString(" + ")}", style = MaterialTheme.typography.titleSmall)
                             Text(
                                 "${s.host} · ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(s.capturedAt))}",
                                 style = MaterialTheme.typography.bodySmall,
@@ -146,8 +150,8 @@ fun SetupScreen(vm: MainViewModel, onOpenLogin: () -> Unit, onCrawlStarted: () -
                     }
                 } else {
                     Text(
-                        "Für geschützte Wikis: im eingebetteten Browser einloggen (SSO, OAuth, 2FA). " +
-                            "Die Session-Cookies werden anschließend vom Crawler verwendet.",
+                        "Für geschützte Wikis: im eingebetteten Browser einloggen (Formular, HTTP-Login, SSO, OAuth, 2FA). " +
+                            "Cookies bzw. Zugangsdaten werden anschließend vom Crawler verwendet.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

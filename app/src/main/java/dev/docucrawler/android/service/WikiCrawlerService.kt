@@ -85,7 +85,8 @@ class WikiCrawlerService : Service() {
         val crawler = WikiCrawler(
             config = config,
             outputDir = outputDir,
-            cookieProvider = WebViewCookieProvider(session?.cookieHeader, session?.host),
+            cookieProvider = WebViewCookieProvider(session?.cookieHeader?.ifBlank { null }, session?.host),
+            httpAuth = session?.httpAuth,
             userAgent = userAgent,
             listener = object : WikiCrawler.Listener {
                 override fun onProgress(progress: WikiCrawler.CrawlProgress) {

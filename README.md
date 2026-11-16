@@ -11,6 +11,9 @@ auch hinter Logins (Formular, SSO, OAuth, 2FA).
 2. **Login (optional)**: „Im Browser einloggen“ öffnet eine WebView (JavaScript + DOM-Storage aktiv,
    Third-Party-Cookies für SSO erlaubt). Nach dem Login übernimmt **„Login abschließen & Session übernehmen“**
    alle Cookies per `CookieManager.getInstance().getCookie(url)` sowie den User-Agent.
+   Geschützte Bereiche mit **HTTP-Authentifizierung** (Basic Auth / `.htaccess`, Browser-Dialog „Sign in“)
+   werden über einen eigenen Anmeldedialog bedient; der Crawler sendet die Zugangsdaten anschließend als
+   `Authorization: Basic …` – ausschließlich an denselben Host und nur im Arbeitsspeicher gehalten.
 3. **Crawler**: Ein Foreground-Service (`dataSync`, Partial-WakeLock) crawlt per BFS weiter, auch bei
    ausgeschaltetem Display. Das Dashboard zeigt live gespeicherte Seiten, Warteschlange, Fehler, aktuelle URL,
    Log und einen Abbrechen-Button (auch in der Benachrichtigung).

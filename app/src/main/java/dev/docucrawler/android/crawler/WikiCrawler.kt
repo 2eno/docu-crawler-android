@@ -32,6 +32,8 @@ class WikiCrawler(
     private val cookieProvider: CookieProvider,
     private val userAgent: String,
     private val listener: Listener,
+    /** Optionale HTTP-Basic-Auth-Zugangsdaten (präemptiv an den gleichen Host gesendet). */
+    private val httpAuth: HttpCredentials? = null,
     clientOverride: OkHttpClient? = null,
 ) {
     interface Listener {
@@ -79,7 +81,10 @@ class WikiCrawler(
             "Bereich: ${start.host}${pathPrefix ?: "/ (ganze Domain)"} · Tiefe ${config.maxDepth} · Delay ${config.delayMs} ms" +
                 (config.contentSelector?.takeIf { it.isNotBlank() }?.let { " · Selektor '$it'" } ?: "")
         )
-        if (cookieProvider.cookieHeaderFor(start.toString()).isNullOrBlank()) {
+        val hasCookies = !cookieProvider.cookieHeaderFor(start.toString()).isNullOrBlank()
+        val hasAuth = httpAuth?.appliesTo(start.host) == true
+        if (hasAuth) listener.onLog(LogLevel.INFO, "HTTP-Authentifizierung aktiv (Benutzer '${httpAuth!!.username}').")
+        if (!hasCookies && !hasAuth) {
             listener.onLog(LogLevel.WARN, "Keine Session-Cookies vorhanden – crawle anonym.")
         }
 
@@ -195,7 +200,10 @@ class WikiCrawler(
                 }
                 if (!response.isSuccessful) {
                     if (code == 401 || code == 403) {
-                        listener.onLog(LogLevel.ERROR, "HTTP $code für $url – Zugriff verweigert (Session gültig?)")
+                        val hint = if (code == 401 && response.header("WWW-Authenticate") != null) {
+                            if (httpAuth == null) "HTTP-Login nötig – im Login-Browser anmelden" else "Benutzername/Passwort falsch?"
+                        } else "Session gültig?"
+                        listener.onLog(LogLevel.ERROR, "HTTP $code für $url – Zugriff verweigert ($hint)")
                         errors++
                     } else {
                         listener.onLog(LogLevel.WARN, "HTTP $code für $url – übersprungen")
@@ -250,13 +258,18 @@ class WikiCrawler(
         )
     }
 
-    /** Hängt Session-Cookies an jeden Request und übernimmt `Set-Cookie` zurück in den Store. */
+    /** Hängt Session-Cookies (und ggf. Basic-Auth) an jeden Request und übernimmt `Set-Cookie` zurück in den Store. */
     private inner class SessionInterceptor : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
             val req = chain.request()
             val url = req.url.toString()
             val cookie = cookieProvider.cookieHeaderFor(url)
-            val newReq = if (!cookie.isNullOrBlank()) req.newBuilder().header("Cookie", cookie).build() else req
+            val builder = req.newBuilder()
+            if (!cookie.isNullOrBlank()) builder.header("Cookie", cookie)
+            if (httpAuth != null && httpAuth.appliesTo(req.url.host) && req.header("Authorization") == null) {
+                builder.header("Authorization", httpAuth.basicHeader())
+            }
+            val newReq = builder.build()
             val response = chain.proceed(newReq)
             response.headers("Set-Cookie").forEach { cookieProvider.storeSetCookie(url, it) }
             return response

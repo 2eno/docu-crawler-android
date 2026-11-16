@@ -54,7 +54,13 @@ class WikiCrawlerTest {
 
     @After fun tearDown() = server.shutdown()
 
-    private fun crawler(depth: Int, cookie: String?, selector: String? = "main", logs: MutableList<String> = mutableListOf()) =
+    private fun crawler(
+        depth: Int,
+        cookie: String?,
+        selector: String? = "main",
+        logs: MutableList<String> = mutableListOf(),
+        auth: HttpCredentials? = null,
+    ) =
         WikiCrawler(
             config = CrawlConfig(
                 startUrl = server.url("/docs/").toString(),
@@ -70,6 +76,7 @@ class WikiCrawlerTest {
                 override fun onProgress(progress: WikiCrawler.CrawlProgress) = Unit
                 override fun onLog(level: LogLevel, message: String) { logs += "$level $message" }
             },
+            httpAuth = auth,
         )
 
     @Test fun `bfs crawl with cookies respects depth scope and excludes`() = runTest {
@@ -112,5 +119,37 @@ class WikiCrawlerTest {
         assertEquals(0, summary.pagesSaved)
         assertTrue(logs.any { it.contains("Keine Session-Cookies") })
         assertTrue(logs.any { it.contains("Weiterleitung aus dem Bereich") })
+    }
+
+    @Test fun `http basic auth is sent preemptively and only to the same host`() = runTest {
+        val expected = okhttp3.Credentials.basic("Ingo", "Geheim-ä", Charsets.UTF_8)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                requested += request
+                if (request.getHeader("Authorization") != expected) {
+                    return MockResponse().setResponseCode(401)
+                        .setHeader("WWW-Authenticate", "Basic realm=\"INTERNBEREICH\"")
+                }
+                return when (request.path) {
+                    "/docs/" -> page("Home", "a")
+                    "/docs/a" -> page("A")
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        val host = server.url("/").host
+        val summary = crawler(depth = 1, cookie = null, auth = HttpCredentials(host, "INTERNBEREICH", "Ingo", "Geheim-ä")).run()
+        assertEquals(2, summary.pagesSaved)
+        assertTrue(requested.all { it.getHeader("Authorization") == expected })
+
+        // Falsche Zugangsdaten ⇒ verständliche Fehlermeldung
+        val logs = mutableListOf<String>()
+        val failed = crawler(depth = 1, cookie = null, logs = logs, auth = HttpCredentials(host, null, "Ingo", "falsch")).run()
+        assertEquals(0, failed.pagesSaved)
+        assertTrue(logs.any { it.contains("Benutzername/Passwort falsch?") })
+
+        // Andere Domain ⇒ kein Authorization-Header
+        assertFalse(HttpCredentials("other.org", null, "u", "p").appliesTo(host))
+        assertTrue(HttpCredentials("www.follow.de", null, "u", "p").appliesTo("follow.de"))
     }
 }

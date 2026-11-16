@@ -3,6 +3,7 @@ package dev.docucrawler.android.data
 import android.content.Context
 import android.webkit.CookieManager
 import android.webkit.WebSettings
+import dev.docucrawler.android.crawler.HttpCredentials
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +15,8 @@ data class SessionData(
     val host: String,
     val cookieHeader: String,
     val userAgent: String,
+    /** HTTP-Basic-Auth-Zugangsdaten, falls die Seite per `WWW-Authenticate` geschützt ist. */
+    val httpAuth: HttpCredentials? = null,
     val capturedAt: Long = System.currentTimeMillis(),
 ) {
     val cookieNames: List<String>
@@ -31,6 +34,17 @@ object SessionRepository {
     val session: StateFlow<SessionData?> = _session.asStateFlow()
 
     /**
+     * Im Login-Browser eingegebene HTTP-Auth-Zugangsdaten. Bewusst nur im Arbeitsspeicher –
+     * das Passwort wird nie auf die Platte geschrieben.
+     */
+    @Volatile
+    private var pendingHttpAuth: HttpCredentials? = null
+
+    fun rememberHttpAuth(credentials: HttpCredentials) {
+        pendingHttpAuth = credentials
+    }
+
+    /**
      * Liest alle aktiven Cookies für [url] (und – falls abweichend – für die zuletzt besuchte
      * [currentUrl]) über `CookieManager.getInstance().getCookie(url)` aus.
      */
@@ -44,21 +58,25 @@ object SessionRepository {
             }
         }
         val header = mergeCookieHeaders(sources)
-        if (header.isBlank()) {
+        val host = runCatching { URI(url).host }.getOrNull().orEmpty()
+        val auth = pendingHttpAuth?.takeIf { it.appliesTo(host) }
+        if (header.isBlank() && auth == null) {
             _session.value = null
             return null
         }
         val data = SessionData(
             url = url,
-            host = runCatching { URI(url).host }.getOrNull().orEmpty(),
+            host = host,
             cookieHeader = header,
             userAgent = userAgent,
+            httpAuth = auth,
         )
         _session.value = data
         return data
     }
 
     fun clear() {
+        pendingHttpAuth = null
         CookieManager.getInstance().removeAllCookies(null)
         CookieManager.getInstance().flush()
         _session.value = null

@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.HttpAuthHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -19,7 +20,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cookie
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -28,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -45,12 +50,29 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.docucrawler.android.crawler.HttpCredentials
 import dev.docucrawler.android.data.SessionData
+import dev.docucrawler.android.data.SessionRepository
 import dev.docucrawler.android.ui.MainViewModel
 import kotlinx.coroutines.launch
+
+/** Offene HTTP-Auth-Anfrage (Basic/Digest) der WebView – kann mehrere wartende Requests bündeln. */
+private class AuthRequest(
+    val host: String,
+    val realm: String?,
+    val handlers: MutableList<HttpAuthHandler>,
+    val previousAttemptFailed: Boolean,
+) {
+    val key get() = "$host|$realm"
+}
 
 /**
  * Eingebetteter Browser für den interaktiven Login (Formular, OAuth, SSO, 2FA).
@@ -72,6 +94,8 @@ fun LoginScreen(vm: MainViewModel, onDone: () -> Unit) {
     var progress by remember { mutableIntStateOf(0) }
     var canGoBack by remember { mutableStateOf(false) }
     var captured by remember { mutableStateOf<SessionData?>(null) }
+    var authRequest by remember { mutableStateOf<AuthRequest?>(null) }
+    var lastSubmittedAuth by remember { mutableStateOf<HttpCredentials?>(null) }
 
     val webView = remember {
         WebView(context).apply webView@{
@@ -107,6 +131,30 @@ fun LoginScreen(vm: MainViewModel, onDone: () -> Unit) {
                     canGoBack = view.canGoBack()
                 }
 
+                /**
+                 * HTTP-Authentifizierung (`401` + `WWW-Authenticate`, z. B. `.htaccess`). Ohne diesen
+                 * Callback bricht die WebView die Anmeldung kommentarlos ab – Browser zeigen hier
+                 * einen eigenen Dialog, den wir in Compose nachbauen.
+                 */
+                override fun onReceivedHttpAuthRequest(
+                    view: WebView, handler: HttpAuthHandler, host: String, realm: String?,
+                ) {
+                    val pending = authRequest
+                    if (pending != null && pending.host == host && pending.realm == realm) {
+                        pending.handlers += handler // weiterer Request für denselben Bereich
+                        return
+                    }
+                    pending?.handlers?.forEach { it.cancel() }
+                    val last = lastSubmittedAuth
+                    authRequest = AuthRequest(
+                        host = host,
+                        realm = realm,
+                        handlers = mutableListOf(handler),
+                        // Erneute Anfrage für bereits beantworteten Bereich ⇒ Zugangsdaten falsch.
+                        previousAttemptFailed = last != null && last.host == host && last.realm == realm,
+                    )
+                }
+
                 override fun onPageFinished(view: WebView, url: String) {
                     currentUrl = url
                     pageTitle = view.title.orEmpty()
@@ -129,6 +177,7 @@ fun LoginScreen(vm: MainViewModel, onDone: () -> Unit) {
 
     DisposableEffect(Unit) {
         onDispose {
+            authRequest?.handlers?.forEach { it.cancel() }
             CookieManager.getInstance().flush()
             webView.stopLoading()
             webView.destroy()
@@ -192,7 +241,7 @@ fun LoginScreen(vm: MainViewModel, onDone: () -> Unit) {
                         onClick = {
                             val session = vm.captureSession(webView.url ?: currentUrl, webView.settings.userAgentString)
                             if (session == null) {
-                                scope.launch { snackbar.showSnackbar("Keine Cookies gefunden – bist du eingeloggt?") }
+                                scope.launch { snackbar.showSnackbar("Keine Cookies/Zugangsdaten gefunden – bist du eingeloggt?") }
                             } else {
                                 captured = session
                             }
@@ -221,16 +270,105 @@ fun LoginScreen(vm: MainViewModel, onDone: () -> Unit) {
             title = { Text("Session übernommen") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("${session.cookieNames.size} Cookies für ${session.host}:")
-                    Text(
-                        session.cookieNames.joinToString(", "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text("Der Crawler sendet diese Cookies und denselben User-Agent bei jedem Request mit.")
+                    session.httpAuth?.let {
+                        Text("HTTP-Login für ${it.host} als „${it.username}“" + (it.realm?.let { r -> " (Bereich „$r“)" } ?: ""))
+                    }
+                    if (session.cookieNames.isNotEmpty()) {
+                        Text("${session.cookieNames.size} Cookies für ${session.host}:")
+                        Text(
+                            session.cookieNames.joinToString(", "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text("Der Crawler sendet diese Anmeldedaten und denselben User-Agent bei jedem Request mit.")
                 }
             },
             confirmButton = { TextButton(onClick = { captured = null; onDone() }) { Text("Weiter") } },
         )
     }
+
+    authRequest?.let { req ->
+        HttpAuthDialog(
+            request = req,
+            initialUsername = lastSubmittedAuth?.takeIf { it.host == req.host }?.username.orEmpty(),
+            onSubmit = { user, pass ->
+                val creds = HttpCredentials(req.host, req.realm, user, pass)
+                lastSubmittedAuth = creds
+                SessionRepository.rememberHttpAuth(creds)
+                authRequest = null
+                req.handlers.forEach { it.proceed(user, pass) }
+            },
+            onCancel = {
+                authRequest = null
+                req.handlers.forEach { it.cancel() }
+            },
+        )
+    }
+}
+
+@Composable
+private fun HttpAuthDialog(
+    request: AuthRequest,
+    initialUsername: String,
+    onSubmit: (String, String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var username by remember(request.key) { mutableStateOf(initialUsername) }
+    var password by remember(request.key) { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    val canSubmit = username.isNotEmpty()
+
+    AlertDialog(
+        onDismissRequest = onCancel,
+        icon = { Icon(Icons.Filled.Key, contentDescription = null) },
+        title = { Text("Anmeldung erforderlich") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    buildString {
+                        append(request.host).append(" verlangt Benutzername und Passwort.")
+                        request.realm?.takeIf { it.isNotBlank() }?.let { append(" Bereich: „").append(it).append("“") }
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (request.previousAttemptFailed) {
+                    Text(
+                        "Anmeldung fehlgeschlagen – bitte Groß-/Kleinschreibung prüfen.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("Benutzername") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Passwort") },
+                    singleLine = true,
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    trailingIcon = {
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Icon(
+                                if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = if (showPassword) "Passwort verbergen" else "Passwort anzeigen",
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSubmit(username, password) }, enabled = canSubmit) { Text("Anmelden") }
+        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Abbrechen") } },
+    )
 }
