@@ -1,0 +1,54 @@
+name: Android Debug Build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: JDK 17 einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK einrichten
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 build-tools;35.0.0"
+
+      - name: Gradle einrichten (mit Cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit-Tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Debug-APK bauen
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: APK hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: docucrawler-debug-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Test-Reports hochladen
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
