@@ -32,7 +32,16 @@ class MarkdownConverter {
         val selectorMatched: Boolean,
     )
 
-    fun convert(document: Document, contentSelector: String?): Result {
+    /**
+     * @param imageRewriter optional: bekommt die absolute Bild-URL und liefert einen lokalen
+     *   (relativen) Pfad zurück, oder `null`, um die Original-URL zu behalten. Wird nur für Bilder
+     *   aufgerufen, die tatsächlich im exportierten Inhalt landen.
+     */
+    fun convert(
+        document: Document,
+        contentSelector: String?,
+        imageRewriter: ((String) -> String?)? = null,
+    ): Result {
         val title = document.title().ifBlank {
             document.selectFirst("h1")?.text().orEmpty()
         }.trim()
@@ -52,13 +61,19 @@ class MarkdownConverter {
         } else emptyList()
 
         val selectorMatched = selector.isEmpty() || selected.isNotEmpty()
+        val contentRoots: List<Element> = selected.ifEmpty {
+            // Ohne (passenden) Selektor: typische Layout-Elemente entfernen.
+            document.body().also { it.select(LAYOUT_REMOVE).remove() }.let(::listOf)
+        }
+        if (imageRewriter != null) {
+            contentRoots.flatMap { it.select("img[src]") }.forEach { img ->
+                imageRewriter(img.attr("src"))?.let { local -> img.attr("src", local) }
+            }
+        }
         val html = if (selected.isNotEmpty()) {
             selected.joinToString("\n") { it.outerHtml() }
         } else {
-            val body = document.body()
-            // Ohne Selektor: typische Layout-Elemente entfernen.
-            body.select(LAYOUT_REMOVE).remove()
-            body.html()
+            contentRoots.first().html()
         }
 
         val markdown = postProcess(converter.convert(html))
@@ -70,7 +85,13 @@ class MarkdownConverter {
             val abs = a.absUrl("href")
             if (abs.isNotEmpty()) a.attr("href", abs)
         }
-        doc.select("img[src]").forEach { img ->
+        doc.select("img").forEach { img ->
+            // Lazy-Loading: echte URL steckt oft in data-src, src ist nur ein Platzhalter.
+            val src = img.attr("src")
+            if (src.isBlank() || src.startsWith("data:")) {
+                LAZY_SRC_ATTRS.firstOrNull { img.hasAttr(it) && img.attr(it).isNotBlank() }
+                    ?.let { img.attr("src", img.attr(it)) }
+            }
             val abs = img.absUrl("src")
             if (abs.isNotEmpty()) img.attr("src", abs)
         }
@@ -105,6 +126,7 @@ class MarkdownConverter {
         .trim() + "\n"
 
     companion object {
+        private val LAZY_SRC_ATTRS = listOf("data-src", "data-lazy-src", "data-original")
         private val LANG_CLASS = Regex("""(?:language|lang|highlight|brush|source)-([A-Za-z0-9_+#.-]+)""")
         private val NON_LANGUAGES = setOf("source", "none", "plaintext", "default")
         private const val ALWAYS_REMOVE =

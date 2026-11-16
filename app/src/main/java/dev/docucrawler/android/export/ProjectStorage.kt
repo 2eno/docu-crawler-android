@@ -1,6 +1,7 @@
 package dev.docucrawler.android.export
 
 import android.content.Context
+import dev.docucrawler.android.crawler.ImageDownloader
 import dev.docucrawler.android.crawler.UrlUtils
 import java.io.File
 
@@ -8,6 +9,7 @@ data class CrawlProject(
     val name: String,
     val dir: File,
     val fileCount: Int,
+    val imageCount: Int,
     val totalBytes: Long,
     val lastModified: Long,
 )
@@ -23,13 +25,17 @@ object ProjectStorage {
     fun listProjects(context: Context): List<CrawlProject> =
         crawlsRoot(context).listFiles { f -> f.isDirectory }.orEmpty()
             .map { dir ->
-                val files = dir.walkTopDown().filter { it.isFile && it.extension == "md" }.toList()
+                val all = dir.walkTopDown().filter { it.isFile && !it.name.endsWith(".part") }.toList()
+                val files = all.filter { it.extension == "md" }
+                val assetsDir = File(dir, ImageDownloader.ASSETS_DIR)
+                val imageCount = all.count { it.parentFile == assetsDir }
                 CrawlProject(
                     name = dir.name,
                     dir = dir,
                     fileCount = files.size,
-                    totalBytes = files.sumOf { it.length() },
-                    lastModified = files.maxOfOrNull { it.lastModified() } ?: dir.lastModified(),
+                    imageCount = imageCount,
+                    totalBytes = all.sumOf { it.length() },
+                    lastModified = all.maxOfOrNull { it.lastModified() } ?: dir.lastModified(),
                 )
             }
             .sortedByDescending { it.lastModified }

@@ -34,4 +34,18 @@ class ExporterTest {
         assertTrue(out.contains("\n---\n\n## FILE: `docs/guide/setup.md`\n\n# Setup"))
         assertTrue(out.indexOf("FILE: `docs/index.md`") < out.indexOf("FILE: `docs/guide/index.md`"))
     }
+
+    @Test fun `zip includes assets and combined links point to root assets`() {
+        val dir = project()
+        dir.resolve("assets").mkdirs()
+        dir.resolve("assets/foto-1234abcd.png").writeBytes(ByteArray(10))
+        dir.resolve("docs/guide/setup.md").writeText("# Setup\n\n![Foto](../../assets/foto-1234abcd.png)\n")
+
+        val names = ZipFile(Exporter.writeZip(dir, tmp.root.resolve("e/p.zip"), "proj", includeCombined = true))
+            .use { z -> z.entries().toList().map { it.name } }
+        assertTrue(names.contains("proj/assets/foto-1234abcd.png"))
+
+        val combined = Exporter.writeCombinedMarkdown(dir, tmp.root.resolve("c.md"), "proj").readText()
+        assertTrue(combined.contains("![Foto](assets/foto-1234abcd.png)"))
+    }
 }

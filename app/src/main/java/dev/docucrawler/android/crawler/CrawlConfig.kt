@@ -17,6 +17,10 @@ data class CrawlConfig(
     val delayMs: Long = 500,
     /** Anzahl paralleler Verbindungen/Worker (1–16). */
     val concurrency: Int = 4,
+    /** Bilder des Inhalts nach `assets/` herunterladen und Links lokal umschreiben. */
+    val downloadImages: Boolean = false,
+    /** Maximale Größe eines Bildes in Bytes. */
+    val maxImageBytes: Long = 5L * 1024 * 1024,
     /** Optionaler CSS-Selektor für den Hauptinhalt, z. B. `main`, `article`, `#mw-content-text`. */
     val contentSelector: String? = null,
     /** Nur Links unterhalb des Pfad-Präfixes der Start-URL verfolgen (sonst: ganze Domain). */

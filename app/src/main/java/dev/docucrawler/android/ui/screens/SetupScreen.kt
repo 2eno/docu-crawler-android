@@ -230,6 +230,21 @@ fun SetupScreen(vm: MainViewModel, onOpenLogin: () -> Unit, onCrawlStarted: () -
                     }
                 }
 
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Bilder herunterladen", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Bilder im Inhalt landen in assets/ und werden lokal verlinkt (nur im ZIP).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = form.downloadImages,
+                        onCheckedChange = { v -> vm.updateForm { it.copy(downloadImages = v) } },
+                    )
+                }
+
                 TextButton(onClick = { showAdvanced = !showAdvanced }) {
                     Icon(if (showAdvanced) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null)
                     Text(" Erweitert")
@@ -248,6 +263,17 @@ fun SetupScreen(vm: MainViewModel, onOpenLogin: () -> Unit, onCrawlStarted: () -
                             Switch(
                                 checked = form.restrictToPathPrefix,
                                 onCheckedChange = { v -> vm.updateForm { it.copy(restrictToPathPrefix = v) } },
+                            )
+                        }
+                        if (form.downloadImages) {
+                            OutlinedTextField(
+                                value = form.maxImageMb,
+                                onValueChange = { v -> vm.updateForm { it.copy(maxImageMb = v.filter(Char::isDigit).take(3)) } },
+                                label = { Text("Max. Bildgröße (MB)") },
+                                supportingText = { Text("Größere Bilder werden übersprungen") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
                         OutlinedTextField(

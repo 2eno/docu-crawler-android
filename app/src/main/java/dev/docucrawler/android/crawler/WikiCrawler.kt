@@ -54,11 +54,12 @@ class WikiCrawler(
         val visited: Int,
         val errors: Int,
         val skipped: Int,
+        val imagesSaved: Int,
         val currentUrl: String?,
         val currentDepth: Int,
     )
 
-    data class Summary(val pagesSaved: Int, val errors: Int, val skipped: Int, val outputDir: File)
+    data class Summary(val pagesSaved: Int, val errors: Int, val skipped: Int, val imagesSaved: Int, val outputDir: File)
 
     private data class QueueItem(val url: HttpUrl, val depth: Int)
 
@@ -73,6 +74,10 @@ class WikiCrawler(
         // Network-Interceptor: läuft für jeden Redirect-Hop einzeln → Cookies immer passend zur Ziel-URL.
         .addNetworkInterceptor(SessionInterceptor())
         .build()
+
+    private val images: ImageDownloader? = if (config.downloadImages) {
+        ImageDownloader(client, outputDir, userAgent, config.maxImageBytes) { level, msg -> listener.onLog(level, msg) }
+    } else null
 
     private val pagesSaved = AtomicInteger()
     private val errors = AtomicInteger()
@@ -101,6 +106,7 @@ class WikiCrawler(
             LogLevel.INFO,
             "Bereich: ${start.host}${pathPrefix ?: "/ (ganze Domain)"} · Tiefe ${config.maxDepth} · " +
                 "$workers parallel · Delay ${config.delayMs} ms" +
+                (if (images != null) " · Bilder ≤ ${config.maxImageBytes / (1024 * 1024)} MB" else "") +
                 (config.contentSelector?.takeIf { it.isNotBlank() }?.let { " · Selektor '$it'" } ?: "")
         )
         val hasCookies = !cookieProvider.cookieHeaderFor(start.toString()).isNullOrBlank()
@@ -117,11 +123,15 @@ class WikiCrawler(
             repeat(workers) { id -> launch { worker(id, workers) } }
         }
 
+        val imageInfo = images?.let {
+            ", ${it.saved.get()} Bilder (${it.bytes.get() / 1024} KB" +
+                (if (it.failed.get() > 0) ", ${it.failed.get()} fehlgeschlagen" else "") + ")"
+        }.orEmpty()
         listener.onLog(
             LogLevel.INFO,
-            "Fertig: ${pagesSaved.get()} Seiten gespeichert, ${errors.get()} Fehler, ${skipped.get()} übersprungen."
+            "Fertig: ${pagesSaved.get()} Seiten gespeichert$imageInfo, ${errors.get()} Fehler, ${skipped.get()} übersprungen."
         )
-        Summary(pagesSaved.get(), errors.get(), skipped.get(), outputDir)
+        Summary(pagesSaved.get(), errors.get(), skipped.get(), images?.saved?.get() ?: 0, outputDir)
     }
 
     /**
@@ -205,17 +215,22 @@ class WikiCrawler(
                 if (added > 0) listener.onLog(LogLevel.DEBUG, "  +$added neue Links (Tiefe ${item.depth + 1})")
             }
 
-            val result = converter.convert(doc, config.contentSelector)
+            // Zielpfad vorab festlegen – Bild-Links werden relativ dazu geschrieben.
+            val relPath = lock.withLock { uniquePath(UrlUtils.toRelativeFilePath(finalUrl), usedPaths) }
+            val rewriter = images?.let { dl ->
+                { url: String -> dl.localPathFor(url)?.let { ImageDownloader.relativeLink(relPath, it) } }
+            }
+            val result = converter.convert(doc, config.contentSelector, rewriter)
             if (!result.selectorMatched) {
                 listener.onLog(LogLevel.WARN, "  Selektor '${config.contentSelector}' ohne Treffer – nutze <body>.")
             }
             if (result.markdown.isBlank()) {
+                lock.withLock { usedPaths.remove(relPath.lowercase()) }
                 skipped.incrementAndGet()
                 listener.onLog(LogLevel.WARN, "  Kein Inhalt – übersprungen: ${item.url}")
                 return
             }
 
-            val relPath = lock.withLock { uniquePath(UrlUtils.toRelativeFilePath(finalUrl), usedPaths) }
             val file = File(outputDir, relPath)
             file.parentFile?.mkdirs()
             file.writeText(buildFrontMatter(result.title, finalUrl) + result.markdown)
@@ -306,6 +321,7 @@ class WikiCrawler(
                 visited = visited,
                 errors = errors.get(),
                 skipped = skipped.get(),
+                imagesSaved = images?.saved?.get() ?: 0,
                 currentUrl = current?.url?.toString(),
                 currentDepth = current?.depth ?: 0,
             )

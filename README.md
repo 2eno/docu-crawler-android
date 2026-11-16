@@ -45,6 +45,11 @@ app/src/main/java/dev/docucrawler/android/
   `Special:`) werden nie abgerufen.
 - **Ablage**: `filesDir/crawls/<projekt>/` exakt nach URL-Pfad, z. B. `/docs/guide/` → `docs/guide/index.md`,
   `/docs/page.html` → `docs/page.md`. Jede Datei hat YAML-Front-Matter (`title`, `source`, `crawled_at`).
+- **Bilder (optional)**: Mit „Bilder herunterladen“ werden Bilder aus dem *exportierten Inhalt* (nicht aus
+  Header/Navigation) mit derselben Anmeldung nach `assets/` geladen – jede URL nur einmal, nur echte
+  `image/*`-Antworten bis zur eingestellten Maximalgröße (Standard 5 MB). Die Links im Markdown zeigen relativ
+  auf die lokale Datei (`![Foto](../assets/foto-1a2b3c4d.png)`); im ZIP und in der darin enthaltenen
+  `combined_wiki.md` funktionieren sie direkt. Lazy-Loading-Bilder (`data-src`) werden erkannt.
 - **Markdown**: Scripts/Styles/Formulare werden entfernt, Links/Bilder absolut gemacht, `<pre>`-Blöcke zu
   Fenced-Code mit erkannter Sprache normalisiert, Tabellen als GFM-Tabellen ausgegeben.
 

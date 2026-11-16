@@ -163,7 +163,9 @@ private fun ProjectCard(
                 Column(Modifier.weight(1f)) {
                     Text(project.name, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "${project.fileCount} Seiten · ${formatBytes(project.totalBytes)} · " +
+                        "${project.fileCount} Seiten · " +
+                            (if (project.imageCount > 0) "${project.imageCount} Bilder · " else "") +
+                            "${formatBytes(project.totalBytes)} · " +
                             DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(project.lastModified)) +
                             if (running) " · Crawl läuft" else "",
                         style = MaterialTheme.typography.bodySmall,

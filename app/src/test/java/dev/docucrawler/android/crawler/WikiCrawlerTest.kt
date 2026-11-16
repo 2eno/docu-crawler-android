@@ -62,6 +62,7 @@ class WikiCrawlerTest {
         auth: HttpCredentials? = null,
         concurrency: Int = 4,
         maxPages: Int = 0,
+        downloadImages: Boolean = false,
     ) =
         WikiCrawler(
             config = CrawlConfig(
@@ -71,6 +72,8 @@ class WikiCrawlerTest {
                 delayMs = 0,
                 concurrency = concurrency,
                 maxPages = maxPages,
+                downloadImages = downloadImages,
+                maxImageBytes = 1000,
                 contentSelector = selector,
             ),
             outputDir = tmp.root.resolve("out"),
@@ -205,5 +208,68 @@ class WikiCrawlerTest {
     @Test fun `max pages limit holds with parallel workers`() = runTest {
         val summary = crawler(depth = 3, cookie = "session=abc", concurrency = 8, maxPages = 3).run()
         assertEquals(3, summary.pagesSaved)
+    }
+
+    @Test fun `images are downloaded once, filtered and linked relatively`() = runTest {
+        val png = okio.Buffer().write(ByteArray(200) { it.toByte() })
+        val auth = okhttp3.Credentials.basic("u", "p", Charsets.UTF_8)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                requested += request
+                if (request.getHeader("Authorization") != auth) return MockResponse().setResponseCode(401)
+                fun html(body: String) = MockResponse().setHeader("Content-Type", "text/html").setBody(
+                    "<html><head><title>T</title></head><body><header><img src='/skin/logo.png'></header><main>$body</main></body></html>"
+                )
+                return when (request.path) {
+                    "/docs/" -> html("<a href='sub/page'>p</a><img src='/img/foto.png' alt='Foto'><img src='/img/huge.jpg'>")
+                    "/docs/sub/page" -> html("<img src='data:image/gif;base64,R0' data-src='/img/foto.png' alt='Wieder'><img src='/img/fake.png'>")
+                    "/img/foto.png", "/skin/logo.png" -> MockResponse().setHeader("Content-Type", "image/png").setBody(png.copy())
+                    "/img/huge.jpg" -> MockResponse().setHeader("Content-Type", "image/jpeg").setBody(okio.Buffer().write(ByteArray(5000)))
+                    "/img/fake.png" -> MockResponse().setHeader("Content-Type", "text/html").setBody("<html>login</html>")
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        val host = server.url("/").host
+        val summary = crawler(
+            depth = 1, cookie = null, concurrency = 4, downloadImages = true,
+            auth = HttpCredentials(host, null, "u", "p"),
+        ).run()
+
+        assertEquals(2, summary.pagesSaved)
+        assertEquals(1, summary.imagesSaved)
+        val out = tmp.root.resolve("out")
+        val assets = out.resolve("assets").listFiles()!!.map { it.name }
+        assertEquals(1, assets.size)
+        val foto = assets.single()
+        assertTrue(foto, foto.matches(Regex("foto-[0-9a-f]{8}\\.png")))
+        assertEquals(200L, out.resolve("assets/$foto").length())
+
+        // Bild nur einmal geladen, Logo aus <header> nie angefragt
+        assertEquals(1, requested.count { it.path == "/img/foto.png" })
+        assertFalse(requested.any { it.path == "/skin/logo.png" })
+
+        val index = out.resolve("docs/index.md").readText()
+        val sub = out.resolve("docs/sub/page.md").readText()
+        println(index); println(sub)
+        assertTrue(index.contains("![Foto](../assets/$foto)"))
+        assertTrue(sub.contains("![Wieder](../../assets/$foto)"))
+        // Zu große / falsche Bilder behalten ihre Original-URL
+        assertTrue(index.contains("/img/huge.jpg)"))
+        assertTrue(sub.contains("/img/fake.png)"))
+    }
+
+    @Test fun `image downloading is off by default`() = runTest {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                requested += request
+                return MockResponse().setHeader("Content-Type", "text/html")
+                    .setBody("<html><body><main><p>x</p><img src='/img/a.png'></main></body></html>")
+            }
+        }
+        val summary = crawler(depth = 0, cookie = null).run()
+        assertEquals(0, summary.imagesSaved)
+        assertEquals(listOf("/docs/"), requested.map { it.path })
+        assertFalse(tmp.root.resolve("out/assets").exists())
     }
 }

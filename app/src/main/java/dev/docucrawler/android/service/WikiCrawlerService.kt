@@ -79,7 +79,7 @@ class WikiCrawlerService : Service() {
         val session = SessionRepository.session.value
         val userAgent = session?.userAgent ?: SessionRepository.defaultUserAgent(this)
 
-        CrawlStateRepository.reset(config.projectName, config.startUrl)
+        CrawlStateRepository.reset(config.projectName, config.startUrl, config.downloadImages)
         acquireWakeLock()
 
         val crawler = WikiCrawler(
@@ -97,6 +97,7 @@ class WikiCrawlerService : Service() {
                             visited = progress.visited,
                             errors = progress.errors,
                             skipped = progress.skipped,
+                            imagesSaved = progress.imagesSaved,
                             currentUrl = progress.currentUrl ?: it.currentUrl,
                             currentDepth = progress.currentDepth,
                         )

@@ -88,7 +88,7 @@ fun DashboardScreen(vm: MainViewModel, onOpenExport: () -> Unit) {
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            StatusBanner(state.status, elapsed)
+            StatusBanner(state.status, elapsed, if (state.downloadImages) state.imagesSaved else null)
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatTile("Gespeichert", state.pagesSaved.toString(), Modifier.weight(1f))
@@ -148,7 +148,7 @@ fun DashboardScreen(vm: MainViewModel, onOpenExport: () -> Unit) {
 }
 
 @Composable
-private fun StatusBanner(status: CrawlStatus, elapsedSec: Long) {
+private fun StatusBanner(status: CrawlStatus, elapsedSec: Long, images: Int?) {
     val (label, color) = when (status) {
         CrawlStatus.IDLE -> "Kein Crawl aktiv – starte im Setup." to MaterialTheme.colorScheme.surfaceVariant
         CrawlStatus.RUNNING -> "Läuft" to MaterialTheme.colorScheme.primaryContainer
@@ -159,7 +159,11 @@ private fun StatusBanner(status: CrawlStatus, elapsedSec: Long) {
     }
     Card(colors = CardDefaults.cardColors(containerColor = color), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Text(
+                if (images != null && status != CrawlStatus.IDLE) "$label · $images Bilder" else label,
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.weight(1f),
+            )
             if (status != CrawlStatus.IDLE) {
                 Text("%d:%02d".format(elapsedSec / 60, elapsedSec % 60), style = MaterialTheme.typography.titleSmall)
             }

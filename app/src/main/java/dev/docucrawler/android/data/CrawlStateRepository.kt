@@ -22,6 +22,8 @@ data class CrawlUiState(
     val visited: Int = 0,
     val errors: Int = 0,
     val skipped: Int = 0,
+    val imagesSaved: Int = 0,
+    val downloadImages: Boolean = false,
     val currentUrl: String? = null,
     val currentDepth: Int = 0,
     val startedAt: Long? = null,
@@ -42,9 +44,10 @@ object CrawlStateRepository {
     private val logCounter = AtomicLong()
     private val timeFormat = DateTimeFormatter.ofPattern("HH:mm:ss")
 
-    fun reset(projectName: String, startUrl: String) {
+    fun reset(projectName: String, startUrl: String, downloadImages: Boolean = false) {
         _state.value = CrawlUiState(
             status = CrawlStatus.RUNNING,
+            downloadImages = downloadImages,
             projectName = projectName,
             startUrl = startUrl,
             startedAt = System.currentTimeMillis(),

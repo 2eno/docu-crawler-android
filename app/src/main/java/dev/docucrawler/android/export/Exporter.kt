@@ -1,5 +1,6 @@
 package dev.docucrawler.android.export
 
+import dev.docucrawler.android.crawler.ImageDownloader
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -20,6 +21,14 @@ object Exporter {
                 .thenBy { it.name })
             .toList()
 
+    /** Bild-Assets des Projekts (`assets/…`), falls beim Crawl heruntergeladen. */
+    fun assetFiles(projectDir: File): List<File> =
+        File(projectDir, ImageDownloader.ASSETS_DIR).listFiles { f -> f.isFile && !f.name.endsWith(".part") }
+            .orEmpty().sortedBy { it.name }
+
+    /** Seiten-relative Bild-Links (`../../assets/x.png`) auf den Projekt-Wurzelordner umbiegen. */
+    private val RELATIVE_ASSET_LINK = Regex("""\]\((?:\.\./)+${ImageDownloader.ASSETS_DIR}/""")
+
     /**
      * Führt alle Markdown-Dateien zu einer Datei zusammen – mit Inhaltsverzeichnis,
      * Trennlinien und Dateipfad-Überschriften. Ideal als Kontext für Claude.
@@ -36,7 +45,8 @@ object Exporter {
             files.forEach { f ->
                 val rel = f.relativeTo(projectDir).invariantSeparatorsPath
                 w.write("\n\n---\n\n## FILE: `$rel`\n\n")
-                w.write(f.readText().trim())
+                // combined_wiki.md liegt im Projekt-Wurzelordner → Asset-Links dort gültig machen.
+                w.write(f.readText().trim().replace(RELATIVE_ASSET_LINK, "](${ImageDownloader.ASSETS_DIR}/"))
                 w.write("\n")
             }
         }
@@ -44,14 +54,14 @@ object Exporter {
     }
 
     /**
-     * Packt den kompletten Projektordner in eine ZIP-Datei. Optional wird zusätzlich
+     * Packt den kompletten Projektordner (Markdown + `assets/`-Bilder) in eine ZIP-Datei. Optional wird zusätzlich
      * eine `combined_wiki.md` im Wurzelverzeichnis des ZIPs abgelegt.
      */
     fun writeZip(projectDir: File, target: File, projectName: String, includeCombined: Boolean): File {
         target.parentFile?.mkdirs()
         val root = projectDir.name
         ZipOutputStream(BufferedOutputStream(FileOutputStream(target))).use { zip ->
-            markdownFiles(projectDir).forEach { f ->
+            (markdownFiles(projectDir) + assetFiles(projectDir)).forEach { f ->
                 zip.putNextEntry(ZipEntry("$root/${f.relativeTo(projectDir).invariantSeparatorsPath}").apply {
                     time = f.lastModified()
                 })

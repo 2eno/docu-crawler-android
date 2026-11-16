@@ -15,6 +15,8 @@ class SettingsStore(context: Context) {
             maxDepth = prefs.getInt("maxDepth", 3),
             delayMs = prefs.getLong("delayMs", 500),
             concurrency = prefs.getInt("concurrency", 4),
+            downloadImages = prefs.getBoolean("downloadImages", false),
+            maxImageBytes = prefs.getLong("maxImageBytes", 5L * 1024 * 1024),
             contentSelector = prefs.getString("selector", null),
             restrictToPathPrefix = prefs.getBoolean("restrictPrefix", true),
             maxPages = prefs.getInt("maxPages", 0),
@@ -31,6 +33,8 @@ class SettingsStore(context: Context) {
             .putInt("maxDepth", config.maxDepth)
             .putLong("delayMs", config.delayMs)
             .putInt("concurrency", config.concurrency)
+            .putBoolean("downloadImages", config.downloadImages)
+            .putLong("maxImageBytes", config.maxImageBytes)
             .putString("selector", config.contentSelector)
             .putBoolean("restrictPrefix", config.restrictToPathPrefix)
             .putInt("maxPages", config.maxPages)
