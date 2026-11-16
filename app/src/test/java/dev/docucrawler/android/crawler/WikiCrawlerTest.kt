@@ -60,6 +60,8 @@ class WikiCrawlerTest {
         selector: String? = "main",
         logs: MutableList<String> = mutableListOf(),
         auth: HttpCredentials? = null,
+        concurrency: Int = 4,
+        maxPages: Int = 0,
     ) =
         WikiCrawler(
             config = CrawlConfig(
@@ -67,6 +69,8 @@ class WikiCrawlerTest {
                 projectName = "test",
                 maxDepth = depth,
                 delayMs = 0,
+                concurrency = concurrency,
+                maxPages = maxPages,
                 contentSelector = selector,
             ),
             outputDir = tmp.root.resolve("out"),
@@ -151,5 +155,55 @@ class WikiCrawlerTest {
         // Andere Domain ⇒ kein Authorization-Header
         assertFalse(HttpCredentials("other.org", null, "u", "p").appliesTo(host))
         assertTrue(HttpCredentials("www.follow.de", null, "u", "p").appliesTo("follow.de"))
+    }
+
+    private fun savedFiles(): List<String> {
+        val out = tmp.root.resolve("out")
+        return out.walkTopDown().filter { it.isFile }.map { it.relativeTo(out).invariantSeparatorsPath }.sorted().toList()
+    }
+
+    @Test fun `parallel and sequential crawls produce identical output`() = runTest {
+        crawler(depth = 3, cookie = "session=abc", concurrency = 1).run()
+        val sequential = savedFiles()
+        val sequentialRequests = requested.size
+        tmp.root.resolve("out").deleteRecursively()
+        requested.clear()
+
+        val summary = crawler(depth = 3, cookie = "session=abc", concurrency = 8).run()
+        assertEquals(sequential, savedFiles())
+        assertEquals(7, summary.pagesSaved)
+        // Keine doppelten Requests trotz paralleler Worker
+        assertEquals(sequentialRequests, requested.size)
+        assertEquals(requested.size, requested.map { it.path }.toSet().size)
+    }
+
+    @Test fun `workers really fetch in parallel`() = runTest {
+        val active = java.util.concurrent.atomic.AtomicInteger()
+        val maxActive = java.util.concurrent.atomic.AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val now = active.incrementAndGet()
+                maxActive.accumulateAndGet(now) { a, b -> maxOf(a, b) }
+                try {
+                    Thread.sleep(150)
+                    val path = request.path!!
+                    return if (path == "/docs/") page("Home", *Array(12) { "p$it" }) else page(path)
+                } finally {
+                    active.decrementAndGet()
+                }
+            }
+        }
+        val t0 = System.nanoTime()
+        val summary = crawler(depth = 1, cookie = null, concurrency = 6).run()
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        println("13 Seiten mit 6 Workern in $ms ms, max. gleichzeitig: ${maxActive.get()}")
+        assertEquals(13, summary.pagesSaved)
+        assertTrue(maxActive.get() >= 4)
+        assertTrue("zu langsam: $ms ms", ms < 13 * 150)
+    }
+
+    @Test fun `max pages limit holds with parallel workers`() = runTest {
+        val summary = crawler(depth = 3, cookie = "session=abc", concurrency = 8, maxPages = 3).run()
+        assertEquals(3, summary.pagesSaved)
     }
 }

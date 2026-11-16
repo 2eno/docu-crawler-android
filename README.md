@@ -6,8 +6,9 @@ auch hinter Logins (Formular, SSO, OAuth, 2FA).
 
 ## Ablauf
 
-1. **Setup**: Start-URL, Projektname, Tiefe, Delay (Standard 500 ms) und optional einen CSS-Selektor
-   (`main`, `article`, `#mw-content-text`, …) eingeben.
+1. **Setup**: Start-URL, Projektname, Tiefe, Delay (Standard 500 ms), parallele Verbindungen (1–16, Standard 4)
+   und optional einen CSS-Selektor (`main`, `article`, `#mw-content-text`, …) eingeben.
+   Der Delay gilt pro Verbindung – Durchsatz ≈ Verbindungen / (Delay + Antwortzeit).
 2. **Login (optional)**: „Im Browser einloggen“ öffnet eine WebView (JavaScript + DOM-Storage aktiv,
    Third-Party-Cookies für SSO erlaubt). Nach dem Login übernimmt **„Login abschließen & Session übernehmen“**
    alle Cookies per `CookieManager.getInstance().getCookie(url)` sowie den User-Agent.

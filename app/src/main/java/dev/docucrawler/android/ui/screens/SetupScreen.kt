@@ -37,6 +37,7 @@ import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -55,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.docucrawler.android.ui.MainViewModel
 import java.text.DateFormat
+import kotlin.math.roundToInt
 import java.util.Date
 
 private val SELECTOR_PRESETS = listOf("main", "article", "#mw-content-text", ".markdown-body", "#content")
@@ -185,6 +187,26 @@ fun SetupScreen(vm: MainViewModel, onOpenLogin: () -> Unit, onCrawlStarted: () -
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(1f),
+                    )
+                }
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Parallele Verbindungen", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Text("${form.concurrency}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Slider(
+                        value = form.concurrency.toFloat(),
+                        onValueChange = { v -> vm.updateForm { it.copy(concurrency = v.roundToInt()) } },
+                        valueRange = 1f..16f,
+                        steps = 14,
+                    )
+                    val delay = form.delayMs.toLongOrNull() ?: 0
+                    val est = form.concurrency * 1000.0 / (delay + 400)
+                    Text(
+                        "Delay gilt pro Verbindung · ca. %.1f Seiten/s (bei ~400 ms Antwortzeit). ".format(est) +
+                            "Höhere Werte belasten den Server stärker.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 OutlinedTextField(

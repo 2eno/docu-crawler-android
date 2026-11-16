@@ -14,6 +14,7 @@ class SettingsStore(context: Context) {
             projectName = prefs.getString("projectName", "").orEmpty(),
             maxDepth = prefs.getInt("maxDepth", 3),
             delayMs = prefs.getLong("delayMs", 500),
+            concurrency = prefs.getInt("concurrency", 4),
             contentSelector = prefs.getString("selector", null),
             restrictToPathPrefix = prefs.getBoolean("restrictPrefix", true),
             maxPages = prefs.getInt("maxPages", 0),
@@ -29,6 +30,7 @@ class SettingsStore(context: Context) {
             .putString("projectName", config.projectName)
             .putInt("maxDepth", config.maxDepth)
             .putLong("delayMs", config.delayMs)
+            .putInt("concurrency", config.concurrency)
             .putString("selector", config.contentSelector)
             .putBoolean("restrictPrefix", config.restrictToPathPrefix)
             .putInt("maxPages", config.maxPages)

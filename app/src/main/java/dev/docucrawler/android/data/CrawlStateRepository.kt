@@ -5,9 +5,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
+import java.util.concurrent.atomic.AtomicLong
 
 enum class CrawlStatus { IDLE, RUNNING, CANCELLING, FINISHED, CANCELLED, FAILED }
 
@@ -38,8 +38,9 @@ object CrawlStateRepository {
     private val _state = MutableStateFlow(CrawlUiState())
     val state: StateFlow<CrawlUiState> = _state.asStateFlow()
 
-    private var logCounter = 0L
-    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.GERMANY)
+    // Thread-sicher: mehrere Crawler-Worker loggen gleichzeitig.
+    private val logCounter = AtomicLong()
+    private val timeFormat = DateTimeFormatter.ofPattern("HH:mm:ss")
 
     fun reset(projectName: String, startUrl: String) {
         _state.value = CrawlUiState(
@@ -53,7 +54,7 @@ object CrawlStateRepository {
     fun update(block: (CrawlUiState) -> CrawlUiState) = _state.update(block)
 
     fun log(level: LogLevel, message: String) {
-        val entry = LogEntry(logCounter++, timeFormat.format(Date()), level, message)
+        val entry = LogEntry(logCounter.getAndIncrement(), LocalTime.now().format(timeFormat), level, message)
         _state.update { s -> s.copy(logs = (s.logs + entry).takeLast(MAX_LOG_LINES)) }
     }
 }

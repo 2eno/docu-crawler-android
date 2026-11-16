@@ -13,8 +13,10 @@ data class CrawlConfig(
     val projectName: String,
     /** 0 = nur die Startseite, 1 = Startseite + direkt verlinkte Seiten, ... */
     val maxDepth: Int = 3,
-    /** Wartezeit zwischen zwei Requests in Millisekunden. */
+    /** Wartezeit zwischen zwei Requests desselben Workers in Millisekunden. */
     val delayMs: Long = 500,
+    /** Anzahl paralleler Verbindungen/Worker (1–16). */
+    val concurrency: Int = 4,
     /** Optionaler CSS-Selektor für den Hauptinhalt, z. B. `main`, `article`, `#mw-content-text`. */
     val contentSelector: String? = null,
     /** Nur Links unterhalb des Pfad-Präfixes der Start-URL verfolgen (sonst: ganze Domain). */

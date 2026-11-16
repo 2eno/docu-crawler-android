@@ -2,9 +2,15 @@ package dev.docucrawler.android.crawler
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
@@ -17,11 +23,12 @@ import java.io.IOException
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.coroutineContext
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Native Kotlin-Portierung der docu-crawler-Logik:
- * Breadth-First-Search ab der Start-URL, Filterung per Domain/Pfad-Präfix,
+ * Breadth-First-Search ab der Start-URL (mit N parallelen Workern), Filterung per Domain/Pfad-Präfix,
  * HTML → Markdown und Ablage entsprechend der URL-Pfadstruktur.
  *
  * Bewusst ohne Android-Abhängigkeiten, damit die Engine per JVM-Unit-Test prüfbar ist.
@@ -61,24 +68,39 @@ class WikiCrawler(
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
+        .connectionPool(ConnectionPool(MAX_CONCURRENCY, 5, TimeUnit.MINUTES))
+        .dispatcher(Dispatcher().apply { maxRequests = MAX_CONCURRENCY; maxRequestsPerHost = MAX_CONCURRENCY })
         // Network-Interceptor: läuft für jeden Redirect-Hop einzeln → Cookies immer passend zur Ziel-URL.
         .addNetworkInterceptor(SessionInterceptor())
         .build()
 
-    private var pagesSaved = 0
-    private var errors = 0
-    private var skipped = 0
+    private val pagesSaved = AtomicInteger()
+    private val errors = AtomicInteger()
+    private val skipped = AtomicInteger()
+
+    // ---- Gemeinsamer Zustand aller Worker, geschützt durch [lock] ----
+    private val lock = Mutex()
+    private val queue = ArrayDeque<QueueItem>()
+    private val seen = HashSet<String>()
+    private val usedPaths = HashSet<String>()
+    private var inFlight = 0
+    private val limitLogged = AtomicBoolean(false)
+
+    private lateinit var start: HttpUrl
+    private var pathPrefix: String? = null
 
     suspend fun run(): Summary = withContext(Dispatchers.IO) {
-        val start = UrlUtils.normalize(config.startUrl)?.toHttpUrlOrNull()
+        start = UrlUtils.normalize(config.startUrl)?.toHttpUrlOrNull()
             ?: throw IllegalArgumentException("Ungültige Start-URL: ${config.startUrl}")
-        val pathPrefix = if (config.restrictToPathPrefix) UrlUtils.pathPrefixOf(start) else null
+        pathPrefix = if (config.restrictToPathPrefix) UrlUtils.pathPrefixOf(start) else null
+        val workers = config.concurrency.coerceIn(1, MAX_CONCURRENCY)
 
         outputDir.mkdirs()
         listener.onLog(LogLevel.INFO, "Starte Crawl: $start")
         listener.onLog(
             LogLevel.INFO,
-            "Bereich: ${start.host}${pathPrefix ?: "/ (ganze Domain)"} · Tiefe ${config.maxDepth} · Delay ${config.delayMs} ms" +
+            "Bereich: ${start.host}${pathPrefix ?: "/ (ganze Domain)"} · Tiefe ${config.maxDepth} · " +
+                "$workers parallel · Delay ${config.delayMs} ms" +
                 (config.contentSelector?.takeIf { it.isNotBlank() }?.let { " · Selektor '$it'" } ?: "")
         )
         val hasCookies = !cookieProvider.cookieHeaderFor(start.toString()).isNullOrBlank()
@@ -88,92 +110,123 @@ class WikiCrawler(
             listener.onLog(LogLevel.WARN, "Keine Session-Cookies vorhanden – crawle anonym.")
         }
 
-        val queue = ArrayDeque<QueueItem>()
-        val seen = HashSet<String>()
-        val usedPaths = HashSet<String>()
         queue += QueueItem(start, 0)
         seen += start.toString()
-        var firstRequest = true
 
-        while (queue.isNotEmpty()) {
-            coroutineContext.ensureActive()
-            if (config.maxPages in 1..pagesSaved) {
-                listener.onLog(LogLevel.WARN, "Seitenlimit (${config.maxPages}) erreicht – stoppe.")
-                break
-            }
-            val item = queue.removeFirst()
-            report(queue.size, seen.size, item)
-
-            if (!firstRequest && config.delayMs > 0) delay(config.delayMs)
-            firstRequest = false
-
-            try {
-                val page = fetch(item.url) ?: continue
-                val (finalUrl, html) = page
-
-                if (finalUrl.toString() != item.url.toString()) {
-                    if (!UrlUtils.isInScope(finalUrl, start, pathPrefix)) {
-                        skipped++
-                        listener.onLog(
-                            LogLevel.WARN,
-                            "Weiterleitung aus dem Bereich heraus ($finalUrl) – evtl. Login/Session abgelaufen."
-                        )
-                        continue
-                    }
-                    // Redirect-Ziel bereits bekannt (in Queue oder verarbeitet)? Dann Duplikat vermeiden.
-                    if (!seen.add(finalUrl.toString())) {
-                        listener.onLog(LogLevel.DEBUG, "Weiterleitung auf bereits bekannte Seite: $finalUrl")
-                        continue
-                    }
-                }
-
-                val doc = Jsoup.parse(html, finalUrl.toString())
-
-                // Links für BFS extrahieren (vor der Konvertierung, die das DOM verändert).
-                if (item.depth < config.maxDepth) {
-                    var added = 0
-                    for (a in doc.select("a[href]")) {
-                        val abs = a.absUrl("href").takeIf { it.isNotEmpty() } ?: continue
-                        val normalized = UrlUtils.normalize(abs)?.toHttpUrlOrNull() ?: continue
-                        val key = normalized.toString()
-                        if (key in seen) continue
-                        if (!UrlUtils.isInScope(normalized, start, pathPrefix)) continue
-                        if (!UrlUtils.looksLikeHtml(normalized)) continue
-                        if (UrlUtils.matchesExclude(key, config.excludePatterns)) continue
-                        seen += key
-                        queue += QueueItem(normalized, item.depth + 1)
-                        added++
-                    }
-                    if (added > 0) listener.onLog(LogLevel.DEBUG, "  +$added neue Links (Tiefe ${item.depth + 1})")
-                }
-
-                val result = converter.convert(doc, config.contentSelector)
-                if (!result.selectorMatched) {
-                    listener.onLog(LogLevel.WARN, "  Selektor '${config.contentSelector}' ohne Treffer – nutze <body>.")
-                }
-                if (result.markdown.isBlank()) {
-                    skipped++
-                    listener.onLog(LogLevel.WARN, "  Kein Inhalt – übersprungen.")
-                    continue
-                }
-
-                val relPath = uniquePath(UrlUtils.toRelativeFilePath(finalUrl), usedPaths)
-                val file = File(outputDir, relPath)
-                file.parentFile?.mkdirs()
-                file.writeText(buildFrontMatter(result.title, finalUrl) + result.markdown)
-                pagesSaved++
-                listener.onLog(LogLevel.SUCCESS, "✓ $relPath")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                errors++
-                listener.onLog(LogLevel.ERROR, "✗ ${item.url}: ${e.message ?: e.javaClass.simpleName}")
-            }
-            report(queue.size, seen.size, null)
+        coroutineScope {
+            repeat(workers) { id -> launch { worker(id, workers) } }
         }
 
-        listener.onLog(LogLevel.INFO, "Fertig: $pagesSaved Seiten gespeichert, $errors Fehler, $skipped übersprungen.")
-        Summary(pagesSaved, errors, skipped, outputDir)
+        listener.onLog(
+            LogLevel.INFO,
+            "Fertig: ${pagesSaved.get()} Seiten gespeichert, ${errors.get()} Fehler, ${skipped.get()} übersprungen."
+        )
+        Summary(pagesSaved.get(), errors.get(), skipped.get(), outputDir)
+    }
+
+    /**
+     * Ein Worker holt sich Einträge aus der gemeinsamen BFS-Warteschlange, bis sie leer ist und
+     * kein anderer Worker mehr Seiten verarbeitet (die noch neue Links liefern könnten).
+     * Der Delay gilt pro Worker – Gesamtrate ≈ Worker / (Delay + Antwortzeit).
+     */
+    private suspend fun worker(id: Int, workers: Int) {
+        // Starts staffeln, damit nicht alle Worker im selben Moment anfragen.
+        if (id > 0 && config.delayMs > 0) delay(config.delayMs * id / workers)
+        var first = true
+        while (true) {
+            kotlin.coroutines.coroutineContext.ensureActive()
+            val item = lock.withLock {
+                if (limitReached()) return
+                queue.removeFirstOrNull()?.also { inFlight++ }
+            }
+            if (item == null) {
+                if (lock.withLock { queue.isEmpty() && inFlight == 0 }) return
+                delay(IDLE_POLL_MS) // auf neue Links anderer Worker warten
+                continue
+            }
+            try {
+                if (!first && config.delayMs > 0) delay(config.delayMs)
+                first = false
+                report(item)
+                process(item)
+            } finally {
+                lock.withLock { inFlight-- }
+            }
+            report(null)
+        }
+    }
+
+    private fun limitReached(): Boolean {
+        if (config.maxPages <= 0 || pagesSaved.get() + inFlight < config.maxPages) return false
+        if (limitLogged.compareAndSet(false, true)) {
+            listener.onLog(LogLevel.WARN, "Seitenlimit (${config.maxPages}) erreicht – stoppe.")
+        }
+        return true
+    }
+
+    private suspend fun process(item: QueueItem) {
+        try {
+            val (finalUrl, html) = fetch(item.url) ?: return
+
+            if (finalUrl.toString() != item.url.toString()) {
+                if (!UrlUtils.isInScope(finalUrl, start, pathPrefix)) {
+                    skipped.incrementAndGet()
+                    listener.onLog(
+                        LogLevel.WARN,
+                        "Weiterleitung aus dem Bereich heraus ($finalUrl) – evtl. Login/Session abgelaufen."
+                    )
+                    return
+                }
+                // Redirect-Ziel bereits bekannt (in Queue oder verarbeitet)? Dann Duplikat vermeiden.
+                if (!lock.withLock { seen.add(finalUrl.toString()) }) {
+                    listener.onLog(LogLevel.DEBUG, "Weiterleitung auf bereits bekannte Seite: $finalUrl")
+                    return
+                }
+            }
+
+            val doc = Jsoup.parse(html, finalUrl.toString())
+
+            // Links für BFS extrahieren (vor der Konvertierung, die das DOM verändert).
+            if (item.depth < config.maxDepth) {
+                val candidates = doc.select("a[href]").mapNotNull { a ->
+                    val abs = a.absUrl("href").takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                    val normalized = UrlUtils.normalize(abs)?.toHttpUrlOrNull() ?: return@mapNotNull null
+                    normalized.takeIf {
+                        UrlUtils.isInScope(it, start, pathPrefix) &&
+                            UrlUtils.looksLikeHtml(it) &&
+                            !UrlUtils.matchesExclude(it.toString(), config.excludePatterns)
+                    }
+                }
+                val added = lock.withLock {
+                    candidates.count { url ->
+                        seen.add(url.toString()).also { isNew -> if (isNew) queue += QueueItem(url, item.depth + 1) }
+                    }
+                }
+                if (added > 0) listener.onLog(LogLevel.DEBUG, "  +$added neue Links (Tiefe ${item.depth + 1})")
+            }
+
+            val result = converter.convert(doc, config.contentSelector)
+            if (!result.selectorMatched) {
+                listener.onLog(LogLevel.WARN, "  Selektor '${config.contentSelector}' ohne Treffer – nutze <body>.")
+            }
+            if (result.markdown.isBlank()) {
+                skipped.incrementAndGet()
+                listener.onLog(LogLevel.WARN, "  Kein Inhalt – übersprungen: ${item.url}")
+                return
+            }
+
+            val relPath = lock.withLock { uniquePath(UrlUtils.toRelativeFilePath(finalUrl), usedPaths) }
+            val file = File(outputDir, relPath)
+            file.parentFile?.mkdirs()
+            file.writeText(buildFrontMatter(result.title, finalUrl) + result.markdown)
+            pagesSaved.incrementAndGet()
+            listener.onLog(LogLevel.SUCCESS, "✓ $relPath")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            errors.incrementAndGet()
+            listener.onLog(LogLevel.ERROR, "✗ ${item.url}: ${e.message ?: e.javaClass.simpleName}")
+        }
     }
 
     /** Lädt eine Seite; gibt `null` zurück, wenn sie kein HTML ist oder nicht geladen werden konnte. */
@@ -204,16 +257,16 @@ class WikiCrawler(
                             if (httpAuth == null) "HTTP-Login nötig – im Login-Browser anmelden" else "Benutzername/Passwort falsch?"
                         } else "Session gültig?"
                         listener.onLog(LogLevel.ERROR, "HTTP $code für $url – Zugriff verweigert ($hint)")
-                        errors++
+                        errors.incrementAndGet()
                     } else {
                         listener.onLog(LogLevel.WARN, "HTTP $code für $url – übersprungen")
-                        skipped++
+                        skipped.incrementAndGet()
                     }
                     return null
                 }
                 val contentType = response.header("Content-Type").orEmpty()
                 if (contentType.isNotEmpty() && !contentType.contains("html", ignoreCase = true)) {
-                    skipped++
+                    skipped.incrementAndGet()
                     listener.onLog(LogLevel.DEBUG, "Kein HTML ($contentType): $url")
                     return null
                 }
@@ -244,14 +297,15 @@ class WikiCrawler(
         }
     }
 
-    private fun report(queueSize: Int, visited: Int, current: QueueItem?) {
+    private suspend fun report(current: QueueItem?) {
+        val (queued, visited) = lock.withLock { queue.size to seen.size }
         listener.onProgress(
             CrawlProgress(
-                pagesSaved = pagesSaved,
-                queueSize = queueSize,
+                pagesSaved = pagesSaved.get(),
+                queueSize = queued,
                 visited = visited,
-                errors = errors,
-                skipped = skipped,
+                errors = errors.get(),
+                skipped = skipped.get(),
                 currentUrl = current?.url?.toString(),
                 currentDepth = current?.depth ?: 0,
             )
@@ -276,5 +330,8 @@ class WikiCrawler(
         }
     }
 }
+
+private const val MAX_CONCURRENCY = 16
+private const val IDLE_POLL_MS = 50L
 
 enum class LogLevel { DEBUG, INFO, SUCCESS, WARN, ERROR }
