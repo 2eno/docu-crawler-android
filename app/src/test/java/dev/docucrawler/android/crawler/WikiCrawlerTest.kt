@@ -87,7 +87,9 @@ class WikiCrawlerTest {
         )
 
     @Test fun `bfs crawl with cookies respects depth scope and excludes`() = runTest {
-        val summary = crawler(depth = 2, cookie = "session=abc; other=1").run()
+        // concurrency = 1: nur sequenziell ist die strikte BFS-Reihenfolge garantiert. Dass parallele
+        // Crawls dasselbe Ergebnis liefern, prüft `parallel and sequential crawls produce identical output`.
+        val summary = crawler(depth = 2, cookie = "session=abc; other=1", concurrency = 1).run()
         val out = tmp.root.resolve("out")
         val files = out.walkTopDown().filter { it.isFile }.map { it.relativeTo(out).invariantSeparatorsPath }.sorted().toList()
         println(files)
