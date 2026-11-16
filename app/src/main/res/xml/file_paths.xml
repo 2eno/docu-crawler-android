@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- ZIP / combined_wiki.md Exporte -->
+    <cache-path name="exports" path="exports/" />
+    <!-- Einzelne Markdown-Dateien der Crawls -->
+    <files-path name="crawls" path="crawls/" />
+</paths>
