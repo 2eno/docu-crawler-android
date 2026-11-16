@@ -55,9 +55,14 @@ class WikiCrawler(
         val errors: Int,
         val skipped: Int,
         val imagesSaved: Int,
-        val currentUrl: String?,
-        val currentDepth: Int,
-    )
+        /** URLs, die gerade von den Workern verarbeitet werden (eine pro aktiver Verbindung). */
+        val activeUrls: List<String>,
+        /** Höchste bisher begonnene BFS-Ebene – steigt monoton (0 = Startseite). */
+        val level: Int,
+        val maxDepth: Int,
+    ) {
+        val currentUrl: String? get() = activeUrls.firstOrNull()
+    }
 
     data class Summary(val pagesSaved: Int, val errors: Int, val skipped: Int, val imagesSaved: Int, val outputDir: File)
 
@@ -89,6 +94,8 @@ class WikiCrawler(
     private val seen = HashSet<String>()
     private val usedPaths = HashSet<String>()
     private var inFlight = 0
+    private val active = HashMap<Int, QueueItem>()
+    private var levelReached = 0
     private val limitLogged = AtomicBoolean(false)
 
     private lateinit var start: HttpUrl
@@ -106,7 +113,10 @@ class WikiCrawler(
             LogLevel.INFO,
             "Bereich: ${start.host}${pathPrefix ?: "/ (ganze Domain)"} · Tiefe ${config.maxDepth} · " +
                 "$workers parallel · Delay ${config.delayMs} ms" +
-                (if (images != null) " · Bilder ≤ ${config.maxImageBytes / (1024 * 1024)} MB" else "") +
+                (if (images != null) {
+                    " · Bilder ≤ ${config.maxImageBytes / (1024 * 1024)} MB" +
+                        (if (config.preferOriginalImages) " (Originale)" else "")
+                } else "") +
                 (config.contentSelector?.takeIf { it.isNotBlank() }?.let { " · Selektor '$it'" } ?: "")
         )
         val hasCookies = !cookieProvider.cookieHeaderFor(start.toString()).isNullOrBlank()
@@ -147,7 +157,11 @@ class WikiCrawler(
             kotlin.coroutines.coroutineContext.ensureActive()
             val item = lock.withLock {
                 if (limitReached()) return
-                queue.removeFirstOrNull()?.also { inFlight++ }
+                queue.removeFirstOrNull()?.also {
+                    inFlight++
+                    active[id] = it
+                    if (it.depth > levelReached) levelReached = it.depth
+                }
             }
             if (item == null) {
                 if (lock.withLock { queue.isEmpty() && inFlight == 0 }) return
@@ -157,12 +171,15 @@ class WikiCrawler(
             try {
                 if (!first && config.delayMs > 0) delay(config.delayMs)
                 first = false
-                report(item)
+                report()
                 process(item)
             } finally {
-                lock.withLock { inFlight-- }
+                lock.withLock {
+                    inFlight--
+                    active.remove(id)
+                }
             }
-            report(null)
+            report()
         }
     }
 
@@ -218,7 +235,10 @@ class WikiCrawler(
             // Zielpfad vorab festlegen – Bild-Links werden relativ dazu geschrieben.
             val relPath = lock.withLock { uniquePath(UrlUtils.toRelativeFilePath(finalUrl), usedPaths) }
             val rewriter = images?.let { dl ->
-                { url: String -> dl.localPathFor(url)?.let { ImageDownloader.relativeLink(relPath, it) } }
+                { img: org.jsoup.nodes.Element ->
+                    dl.localPathFor(ImageCandidates.resolve(img, config.preferOriginalImages))
+                        ?.let { ImageDownloader.relativeLink(relPath, it) }
+                }
             }
             val result = converter.convert(doc, config.contentSelector, rewriter)
             if (!result.selectorMatched) {
@@ -312,18 +332,23 @@ class WikiCrawler(
         }
     }
 
-    private suspend fun report(current: QueueItem?) {
-        val (queued, visited) = lock.withLock { queue.size to seen.size }
+    /**
+     * Meldet den Fortschritt. Erfassen *und* Melden passieren unter dem Lock, damit Meldungen
+     * verschiedener Worker nicht vertauscht ankommen (sonst könnte die Ebene kurz zurückspringen).
+     * Der Listener aktualisiert nur einen StateFlow – das ist billig genug für den Lock.
+     */
+    private suspend fun report() = lock.withLock {
         listener.onProgress(
             CrawlProgress(
                 pagesSaved = pagesSaved.get(),
-                queueSize = queued,
-                visited = visited,
+                queueSize = queue.size,
+                visited = seen.size,
                 errors = errors.get(),
                 skipped = skipped.get(),
                 imagesSaved = images?.saved?.get() ?: 0,
-                currentUrl = current?.url?.toString(),
-                currentDepth = current?.depth ?: 0,
+                activeUrls = active.toSortedMap().values.map { it.url.toString() },
+                level = levelReached,
+                maxDepth = config.maxDepth,
             )
         )
     }

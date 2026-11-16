@@ -19,6 +19,8 @@ data class CrawlConfig(
     val concurrency: Int = 4,
     /** Bilder des Inhalts nach `assets/` herunterladen und Links lokal umschreiben. */
     val downloadImages: Boolean = false,
+    /** Originalbilder statt eingebetteter Vorschaubilder laden (Fallback: Vorschaubild). */
+    val preferOriginalImages: Boolean = false,
     /** Maximale Größe eines Bildes in Bytes. */
     val maxImageBytes: Long = 5L * 1024 * 1024,
     /** Optionaler CSS-Selektor für den Hauptinhalt, z. B. `main`, `article`, `#mw-content-text`. */

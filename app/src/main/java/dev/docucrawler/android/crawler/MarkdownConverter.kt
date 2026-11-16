@@ -33,14 +33,14 @@ class MarkdownConverter {
     )
 
     /**
-     * @param imageRewriter optional: bekommt die absolute Bild-URL und liefert einen lokalen
+     * @param imageRewriter optional: bekommt das `<img>` (mit absoluter `src`) und liefert einen lokalen
      *   (relativen) Pfad zurück, oder `null`, um die Original-URL zu behalten. Wird nur für Bilder
      *   aufgerufen, die tatsächlich im exportierten Inhalt landen.
      */
     fun convert(
         document: Document,
         contentSelector: String?,
-        imageRewriter: ((String) -> String?)? = null,
+        imageRewriter: ((Element) -> String?)? = null,
     ): Result {
         val title = document.title().ifBlank {
             document.selectFirst("h1")?.text().orEmpty()
@@ -67,7 +67,10 @@ class MarkdownConverter {
         }
         if (imageRewriter != null) {
             contentRoots.flatMap { it.select("img[src]") }.forEach { img ->
-                imageRewriter(img.attr("src"))?.let { local -> img.attr("src", local) }
+                imageRewriter(img)?.let { local ->
+                    img.attr("src", local)
+                    img.removeAttr("srcset")
+                }
             }
         }
         val html = if (selected.isNotEmpty()) {

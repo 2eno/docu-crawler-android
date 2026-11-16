@@ -107,12 +107,21 @@ fun DashboardScreen(vm: MainViewModel, onOpenExport: () -> Unit) {
                 }
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                     Column(Modifier.padding(12.dp).fillMaxWidth()) {
-                        Text("Aktuell (Tiefe ${state.currentDepth})", style = MaterialTheme.typography.labelMedium)
                         Text(
-                            state.currentUrl ?: "…",
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            "Ebene ${state.level} von ${state.maxDepth} · ${state.activeUrls.size} aktiv",
+                            style = MaterialTheme.typography.labelMedium,
                         )
+                        if (state.activeUrls.isEmpty()) {
+                            Text("…", style = MaterialTheme.typography.bodySmall)
+                        }
+                        state.activeUrls.forEach { url ->
+                            Text(
+                                // Host ist bei allen gleich – nur Pfad zeigen, damit das Ende sichtbar bleibt.
+                                "/" + url.substringAfter("://").substringAfter('/', ""),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }

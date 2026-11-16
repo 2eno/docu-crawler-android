@@ -98,8 +98,9 @@ class WikiCrawlerService : Service() {
                             errors = progress.errors,
                             skipped = progress.skipped,
                             imagesSaved = progress.imagesSaved,
-                            currentUrl = progress.currentUrl ?: it.currentUrl,
-                            currentDepth = progress.currentDepth,
+                            activeUrls = progress.activeUrls,
+                            level = progress.level,
+                            maxDepth = progress.maxDepth,
                         )
                     }
                     maybeUpdateNotification(progress)
@@ -123,7 +124,7 @@ class WikiCrawlerService : Service() {
                 CrawlStatus.FAILED
             }
             CrawlStateRepository.update {
-                it.copy(status = finalStatus, finishedAt = System.currentTimeMillis(), currentUrl = null)
+                it.copy(status = finalStatus, finishedAt = System.currentTimeMillis(), activeUrls = emptyList())
             }
             runCatching { WebViewCookieProvider(null, null).flush() }
             finish(finalStatus)
@@ -155,7 +156,7 @@ class WikiCrawlerService : Service() {
         if (now - lastNotificationUpdate < 1000) return
         lastNotificationUpdate = now
         getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildProgressNotification("${p.pagesSaved} Seiten · Queue ${p.queueSize}", p.currentUrl, p.pagesSaved, p.queueSize))
+            .notify(NOTIFICATION_ID, buildProgressNotification("${p.pagesSaved} Seiten · Queue ${p.queueSize} · Ebene ${p.level}/${p.maxDepth}", p.currentUrl, p.pagesSaved, p.queueSize))
     }
 
     private fun buildProgressNotification(text: String, url: String?, done: Int, queued: Int): Notification {

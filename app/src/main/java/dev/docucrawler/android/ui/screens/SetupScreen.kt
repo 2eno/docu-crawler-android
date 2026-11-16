@@ -244,6 +244,23 @@ fun SetupScreen(vm: MainViewModel, onOpenLogin: () -> Unit, onCrawlStarted: () -
                         onCheckedChange = { v -> vm.updateForm { it.copy(downloadImages = v) } },
                     )
                 }
+                AnimatedVisibility(form.downloadImages) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Originalbilder statt Vorschaubilder", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Volle Auflösung (z. B. MediaWiki-Thumbnails → Original). " +
+                                    "Fallback auf das Vorschaubild, wenn das Original fehlt oder zu groß ist.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = form.preferOriginalImages,
+                            onCheckedChange = { v -> vm.updateForm { it.copy(preferOriginalImages = v) } },
+                        )
+                    }
+                }
 
                 TextButton(onClick = { showAdvanced = !showAdvanced }) {
                     Icon(if (showAdvanced) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null)

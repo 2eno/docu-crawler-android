@@ -16,6 +16,7 @@ class SettingsStore(context: Context) {
             delayMs = prefs.getLong("delayMs", 500),
             concurrency = prefs.getInt("concurrency", 4),
             downloadImages = prefs.getBoolean("downloadImages", false),
+            preferOriginalImages = prefs.getBoolean("preferOriginalImages", false),
             maxImageBytes = prefs.getLong("maxImageBytes", 5L * 1024 * 1024),
             contentSelector = prefs.getString("selector", null),
             restrictToPathPrefix = prefs.getBoolean("restrictPrefix", true),
@@ -34,6 +35,7 @@ class SettingsStore(context: Context) {
             .putLong("delayMs", config.delayMs)
             .putInt("concurrency", config.concurrency)
             .putBoolean("downloadImages", config.downloadImages)
+            .putBoolean("preferOriginalImages", config.preferOriginalImages)
             .putLong("maxImageBytes", config.maxImageBytes)
             .putString("selector", config.contentSelector)
             .putBoolean("restrictPrefix", config.restrictToPathPrefix)

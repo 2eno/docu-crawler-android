@@ -63,6 +63,8 @@ class WikiCrawlerTest {
         concurrency: Int = 4,
         maxPages: Int = 0,
         downloadImages: Boolean = false,
+        preferOriginals: Boolean = false,
+        progressLog: MutableList<WikiCrawler.CrawlProgress> = mutableListOf(),
     ) =
         WikiCrawler(
             config = CrawlConfig(
@@ -73,6 +75,7 @@ class WikiCrawlerTest {
                 concurrency = concurrency,
                 maxPages = maxPages,
                 downloadImages = downloadImages,
+                preferOriginalImages = preferOriginals,
                 maxImageBytes = 1000,
                 contentSelector = selector,
             ),
@@ -80,7 +83,9 @@ class WikiCrawlerTest {
             cookieProvider = StaticCookieProvider(cookie),
             userAgent = "TestUA/1.0",
             listener = object : WikiCrawler.Listener {
-                override fun onProgress(progress: WikiCrawler.CrawlProgress) = Unit
+                override fun onProgress(progress: WikiCrawler.CrawlProgress) {
+                    synchronized(progressLog) { progressLog += progress }
+                }
                 override fun onLog(level: LogLevel, message: String) { logs += "$level $message" }
             },
             httpAuth = auth,
@@ -273,5 +278,52 @@ class WikiCrawlerTest {
         assertEquals(0, summary.imagesSaved)
         assertEquals(listOf("/docs/"), requested.map { it.path })
         assertFalse(tmp.root.resolve("out/assets").exists())
+    }
+
+    @Test fun `original images are preferred with thumbnail fallback`() = runTest {
+        val small = ByteArray(100) { 1 }
+        val big = ByteArray(5000) { 2 }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                requested += request
+                fun image(bytes: ByteArray) = MockResponse().setHeader("Content-Type", "image/jpeg")
+                    .setBody(okio.Buffer().write(bytes))
+                return when (request.path) {
+                    "/docs/" -> MockResponse().setHeader("Content-Type", "text/html").setBody(
+                        "<html><body><main>" +
+                            "<a href='/docs/Datei:A.jpg'><img alt='A' src='/images/thumb/a/aa/A.jpg/220px-A.jpg'></a>" +
+                            "<a href='/docs/Datei:B.jpg'><img alt='B' src='/images/thumb/b/bb/B.jpg/220px-B.jpg'></a>" +
+                            "</main></body></html>"
+                    )
+                    "/images/a/aa/A.jpg" -> image(small)                  // Original vorhanden
+                    "/images/b/bb/B.jpg" -> image(big)                    // Original zu groß (> 1000 Bytes)
+                    "/images/thumb/b/bb/B.jpg/220px-B.jpg" -> image(small)
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        val summary = crawler(depth = 0, cookie = null, downloadImages = true, preferOriginals = true).run()
+        assertEquals(2, summary.imagesSaved)
+        val paths = requested.map { it.path }
+        assertTrue(paths.contains("/images/a/aa/A.jpg"))
+        assertFalse("Thumbnail von A unnötig geladen", paths.contains("/images/thumb/a/aa/A.jpg/220px-A.jpg"))
+        assertTrue("Fallback auf Thumbnail von B", paths.contains("/images/thumb/b/bb/B.jpg/220px-B.jpg"))
+        assertFalse("Beschreibungsseite angefragt", paths.any { it!!.contains("Datei:") })
+
+        val md = tmp.root.resolve("out/docs/index.md").readText()
+        println(md)
+        assertTrue(md.contains(Regex("""!\[A]\(\.\./assets/A-[0-9a-f]{8}\.jpg\)""")))
+        assertTrue(md.contains(Regex("""!\[B]\(\.\./assets/220px-B-[0-9a-f]{8}\.jpg\)""")))
+    }
+
+    @Test fun `progress level never goes backwards and active urls respect concurrency`() = runTest {
+        val events = mutableListOf<WikiCrawler.CrawlProgress>()
+        crawler(depth = 3, cookie = "session=abc", concurrency = 3, progressLog = events).run()
+        val snapshot = synchronized(events) { events.toList() }
+        assertTrue(snapshot.isNotEmpty())
+        snapshot.zipWithNext().forEach { (a, b) -> assertTrue("Ebene sprang zurück: ${a.level} → ${b.level}", b.level >= a.level) }
+        assertTrue(snapshot.all { it.activeUrls.size <= 3 && it.maxDepth == 3 })
+        assertEquals(3, snapshot.last().level)
+        assertTrue(snapshot.last().activeUrls.isEmpty())
     }
 }

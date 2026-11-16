@@ -50,6 +50,9 @@ app/src/main/java/dev/docucrawler/android/
   `image/*`-Antworten bis zur eingestellten Maximalgröße (Standard 5 MB). Die Links im Markdown zeigen relativ
   auf die lokale Datei (`![Foto](../assets/foto-1a2b3c4d.png)`); im ZIP und in der darin enthaltenen
   `combined_wiki.md` funktionieren sie direkt. Lazy-Loading-Bilder (`data-src`) werden erkannt.
+  Mit **„Originalbilder statt Vorschaubilder“** wird die volle Auflösung versucht: MediaWiki-Thumbnails
+  (`/images/thumb/a/ab/X.jpg/220px-X.jpg` → `/images/a/ab/X.jpg`), direkt verlinkte Bilddateien und die größte
+  `srcset`-Variante – mit Fallback auf das Vorschaubild, wenn das Original fehlt oder zu groß ist.
 - **Markdown**: Scripts/Styles/Formulare werden entfernt, Links/Bilder absolut gemacht, `<pre>`-Blöcke zu
   Fenced-Code mit erkannter Sprache normalisiert, Tabellen als GFM-Tabellen ausgegeben.
 

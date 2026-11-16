@@ -36,6 +36,13 @@ class ImageDownloader(
     fun localPathFor(url: String): String? =
         cache.computeIfAbsent(url) { download(it) }.ifEmpty { null }
 
+    /**
+     * Probiert die Kandidaten der Reihe nach (z. B. Original → Vorschaubild) und liefert den ersten,
+     * der sich laden ließ.
+     */
+    fun localPathFor(candidates: List<String>): String? =
+        candidates.firstNotNullOfOrNull { localPathFor(it) }
+
     private fun download(url: String): String {
         val httpUrl = url.toHttpUrlOrNull() ?: return ""
         return try {
